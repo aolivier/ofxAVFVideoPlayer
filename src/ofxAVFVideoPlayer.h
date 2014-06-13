@@ -92,7 +92,10 @@ public:
     void                firstFrame();
     void                nextFrame();
     void                previousFrame();
-    
+  
+  void unloadMovie();
+  void reloadMovie(string path);
+  
 protected:
     
     ofLoopType currentLoopState;
@@ -116,7 +119,10 @@ protected:
     
     void updateTexture();
     void reallocatePixels();
-    
+  
+  //alex
+
+  
     ofFbo fbo;
     ofTexture tex;
     ofPixels pixels;

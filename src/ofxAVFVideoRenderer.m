@@ -97,6 +97,162 @@ int count = 0;
     [self loadURL:[NSURL URLWithString:urlPath]];
 }
 
+
+//--------------------------------------------------------------
+- (void)reloadFilePath:(NSString *)filePath
+{
+  [self reloadURL:[NSURL fileURLWithPath:[filePath stringByStandardizingPath]]];
+}
+
+//--------------------------------------------------------------
+- (void)reloadURLPath:(NSString *)urlPath
+{
+  [self reloadURL:[NSURL URLWithString:urlPath]];
+}
+
+// Unload the loaded part of the video...leave the meta data
+-(void)unload{
+
+  
+  //do we call stop?
+ // [self stop];
+  
+  
+  if (self.theFutureIsNow) {
+    self.playerItemVideoOutput = nil;
+    
+    if (_textureCache != NULL) {
+      CVOpenGLTextureCacheRelease(_textureCache);
+      _textureCache = NULL;
+    }
+    if (_latestTextureFrame != NULL) {
+      CVOpenGLTextureRelease(_latestTextureFrame);
+      _latestTextureFrame = NULL;
+    }
+    if (_latestPixelFrame != NULL) {
+      CVPixelBufferRelease(_latestPixelFrame);
+      _latestPixelFrame = NULL;
+    }
+    
+//    if (_amplitudes) {
+//      [_amplitudes release];
+//      _amplitudes = nil;
+//    }
+    _numAmplitudes = 0;
+  }
+  else {
+    // SK: Releasing the CARenderer is slow for some reason
+    //     It will freeze the main thread for a few dozen mS.
+    //     If you're swapping in and out videos a lot, the loadFile:
+    //     method should be re-written to just re-use and re-size
+    //     these layers/objects rather than releasing and reallocating
+    //     them every time a new file is needed.
+    
+    if (_layerRenderer) {
+      //[_layerRenderer release];
+      //_layerRenderer = nil;
+    }
+  }
+  
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  if (self.playerItem) {
+    [self.playerItem removeObserver:self forKeyPath:@"status"];
+    self.playerItem = nil;
+  }
+  
+  [self.player replaceCurrentItemWithPlayerItem:nil];
+  self.player = nil;
+  
+  //[super dealloc];
+  
+  
+}
+
+//Alex's test code to reload only parts of the object
+-(void)reloadURL:(NSURL *)url
+{
+  _bLoading = YES;
+  _bLoaded = NO;
+  _bAudioLoaded = NO;
+  _bPaused = NO;
+  _bMovieDone = NO;
+  
+  _frameRate = 0.0;
+  _playbackRate = 1.0;
+  
+  if (_amplitudes) {
+    [_amplitudes setLength:0];
+  }
+  _numAmplitudes = 0;
+  
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+  
+  NSLog(@"Loading %@", [url absoluteString]);
+  NSString *tracksKey = @"tracks";
+  
+  // Check to see if the file loaded
+  NSError *error;
+  AVKeyValueStatus status = [asset statusOfValueForKey:tracksKey error:&error];
+  static const NSString *kItemStatusContext;
+  
+  if (status == AVKeyValueStatusLoaded) {
+    // Asset metadata has been loaded, set up the player.
+    
+    // Extract the video track to get the video size and other properties.
+    AVAssetTrack *videoTrack = [[asset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0];
+    _videoSize = [videoTrack naturalSize];
+    _currentTime = kCMTimeZero;
+    _duration = asset.duration;
+    _frameRate = [videoTrack nominalFrameRate];
+    
+    self.playerItem = [AVPlayerItem playerItemWithAsset:asset];
+    [self.playerItem addObserver:self forKeyPath:@"status" options:0 context:&kItemStatusContext];
+    
+    // Notify this object when the player reaches the end
+    // This allows us to loop the video
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(playerItemDidReachEnd:)
+                                                 name:AVPlayerItemDidPlayToEndTimeNotification
+                                               object:self.playerItem];
+    
+    if (self.theFutureIsNow) {
+      [self.player replaceCurrentItemWithPlayerItem:self.playerItem];
+      
+      // Create and attach video output. 10.8 Only!!!
+      self.playerItemVideoOutput = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:[self pixelBufferAttributes]];
+      [self.playerItemVideoOutput autorelease];
+      if (self.playerItemVideoOutput) {
+        [(AVPlayerItemVideoOutput *)self.playerItemVideoOutput setSuppressesPlayerRendering:YES];
+      }
+      [self.player.currentItem addOutput:self.playerItemVideoOutput];
+      
+      // Create CVOpenGLTextureCacheRef for optimal CVPixelBufferRef to GL texture conversion.
+      if (self.useTexture && !_textureCache) {
+        CVReturn err = CVOpenGLTextureCacheCreate(kCFAllocatorDefault, NULL,
+                                                  CGLGetCurrentContext(), CGLGetPixelFormat(CGLGetCurrentContext()),
+                                                  NULL, &_textureCache);
+        //(CFDictionaryRef)ctxAttributes, &_textureCache);
+        if (err != noErr) {
+          NSLog(@"Error at CVOpenGLTextureCacheCreate %d", err);
+        }
+      }
+    }
+    else {
+      self.player = [AVPlayer playerWithPlayerItem:self.playerItem];
+      
+      AVPlayerLayer * playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
+      //_layerRenderer = [CARenderer rendererWithCGLContext:CGLGetCurrentContext() options:nil];
+      _layerRenderer.layer = playerLayer;
+      
+      // Video is centered on 0,0 for some reason so layer bounds have to start at -width/2,-height/2
+      //_layerRenderer.bounds = CGRectMake(_videoSize.width * -0.5, _videoSize.height * -0.5, _videoSize.width, _videoSize.height);
+      //playerLayer.bounds = _layerRenderer.bounds;
+    }
+  
+  }
+
+}
+
 //--------------------------------------------------------------
 - (void)loadURL:(NSURL *)url
 {
@@ -105,23 +261,23 @@ int count = 0;
     _bAudioLoaded = NO;
     _bPaused = NO;
     _bMovieDone = NO;
-    
+  
     _frameRate = 0.0;
     _playbackRate = 1.0;
-    
+  
 //    _useTexture = YES;
 //    _useAlpha = NO;
-    
+  
     if (_amplitudes) {
         [_amplitudes setLength:0];
     }
     _numAmplitudes = 0;
-        
+  
     NSLog(@"Loading %@", [url absoluteString]);
-    
+  
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
     NSString *tracksKey = @"tracks";
-    
+  
     [asset loadValuesAsynchronouslyForKeys:@[tracksKey] completionHandler: ^{
         static const NSString *kItemStatusContext;
         // Perform the following back on the main thread
